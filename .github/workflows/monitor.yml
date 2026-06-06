@@ -24,13 +24,15 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      # 使用更简单的缓存策略
+      # 恢复缓存（如果存在）
       - name: Restore previous state
         uses: actions/cache/restore@v4
         id: restore-cache
         with:
           path: last_release.json
           key: ${{ runner.os }}-monitor-${{ github.repository }}
+          restore-keys: |
+            ${{ runner.os }}-monitor-${{ github.repository }}
           fail-on-cache-miss: false
 
       - name: Create empty state file if not exists
@@ -50,13 +52,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python github_release_monitor.py
-        continue-on-error: false
 
+      # 保存缓存 - 注意：save 动作不支持 restore-keys
       - name: Save state to cache
         uses: actions/cache/save@v4
         if: always()
         with:
           path: last_release.json
           key: ${{ runner.os }}-monitor-${{ github.repository }}-${{ github.run_number }}
-          restore-keys: |
-            ${{ runner.os }}-monitor-${{ github.repository }}
