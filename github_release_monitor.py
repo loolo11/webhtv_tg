@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GitHub Release Monitor - 稳定版本
+GitHub Release Monitor for GitHub Actions
+监控 GitHub 仓库新版本发布，下载文件并发送到 Telegram
 """
 
 import os
@@ -20,29 +21,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 class GitHubReleaseMonitor:
     def __init__(self):
+        """从环境变量初始化配置"""
         self.repo_url = os.environ.get('GITHUB_REPO_URL', 'https://github.com/Silent1566/webhtv')
         self.telegram_bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
         self.telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID')
-        self.github_token = os.environ.get('GITHUB_TOKEN')
+        self.github_token = os.environ.get('GITHUB_TOKEN', '')
         
-        # 验证必要配置
+        # 验证必要的环境变量
+        missing_vars = []
         if not self.telegram_bot_token:
-            raise ValueError("TELEGRAM_BOT_TOKEN 未设置")
+            missing_vars.append('TELEGRAM_BOT_TOKEN')
         if not self.telegram_chat_id:
-            raise ValueError("TELEGRAM_CHAT_ID 未设置")
+            missing_vars.append('TELEGRAM_CHAT_ID')
+        
+        if missing_vars:
+            error_msg = f"缺少必要的环境变量: {', '.join(missing_vars)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # 解析仓库信息
-        parts = self.repo_url.rstrip('/').split('github.com/')[-1].split('/')
-        self.owner, self.repo = parts[0], parts[1]
-        self.api_url = f"https://api.github.com/repos/{self.owner}/{self.repo}/releases"
+        try:
+            parts = self.repo_url.rstrip('/').split('github.com/')[-1].split('/')
+            self.owner, self.repo = parts[0], parts[1]
+            self.api_url = f"https://api.github.com/repos/{self.owner}/{self.repo}/releases"
+        except Exception as e:
+            logger.error(f"解析仓库URL失败: {e}")
+            raise ValueError(f"无效的仓库URL: {self.repo_url}") from e
         
         self.state_file = Path('last_release.json')
         logger.info(f"监控器初始化完成: {self.owner}/{self.repo}")
 
     def get_latest_release(self):
-        """获取最新版本"""
+        """获取最新的 release 信息"""
         try:
             headers = {
                 'Accept': 'application/vnd.github+json',
@@ -56,11 +69,11 @@ class GitHubReleaseMonitor:
             releases = response.json()
             return releases[0] if releases else None
         except Exception as e:
-            logger.error(f"获取版本信息失败: {e}")
+            logger.error(f"获取 release 失败: {e}")
             return None
 
-    def load_state(self):
-        """加载状态文件"""
+    def get_last_tag(self):
+        """获取上次处理的 tag"""
         try:
             if self.state_file.exists():
                 data = json.loads(self.state_file.read_text(encoding='utf-8'))
@@ -69,8 +82,8 @@ class GitHubReleaseMonitor:
             logger.warning(f"读取状态文件失败: {e}")
         return None
 
-    def save_state(self, tag):
-        """保存状态文件"""
+    def save_last_tag(self, tag):
+        """保存当前处理的 tag"""
         try:
             data = {
                 'last_tag': tag,
@@ -84,19 +97,19 @@ class GitHubReleaseMonitor:
             logger.error(f"保存状态文件失败: {e}")
             return False
 
-    def download_file(self, url, filename):
-        """下载文件"""
+    def download_asset(self, url, filename):
+        """下载资源文件"""
         try:
             filepath = Path(filename)
             if filepath.exists():
-                logger.info(f"文件已存在: {filename}")
+                logger.info(f"文件已存在，跳过下载: {filename}")
                 return filepath
             
-            headers = {}
+            headers = {'Accept': 'application/octet-stream'}
             if self.github_token:
                 headers['Authorization'] = f"token {self.github_token}"
             
-            logger.info(f"下载: {filename}")
+            logger.info(f"开始下载: {filename}")
             response = requests.get(url, headers=headers, stream=True, timeout=300)
             response.raise_for_status()
             
@@ -108,47 +121,42 @@ class GitHubReleaseMonitor:
             size_mb = filepath.stat().st_size / 1024 / 1024
             logger.info(f"下载完成: {filename} ({size_mb:.2f} MB)")
             return filepath
-            
         except Exception as e:
             logger.error(f"下载失败 {filename}: {e}")
             return None
 
-    def send_telegram_message(self, text):
-        """发送文本消息"""
+    def send_tg_message(self, text):
+        """发送消息到 Telegram"""
         try:
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
-            data = {
+            response = requests.post(url, json={
                 'chat_id': self.telegram_chat_id,
                 'text': text,
                 'parse_mode': 'HTML',
                 'disable_web_page_preview': True
-            }
-            response = requests.post(url, json=data, timeout=30)
+            }, timeout=30)
             response.raise_for_status()
-            logger.info("消息发送成功")
+            logger.info("Telegram 消息发送成功")
             return True
         except Exception as e:
-            logger.error(f"发送消息失败: {e}")
+            logger.error(f"发送 TG 消息失败: {e}")
             return False
 
-    def send_telegram_file(self, filepath, caption):
-        """发送文件"""
+    def send_tg_document(self, filepath, caption):
+        """发送文件到 Telegram"""
         try:
             file_size = filepath.stat().st_size
             if file_size > 50 * 1024 * 1024:
-                logger.warning(f"文件过大 (>50MB): {filepath.name}")
+                logger.warning(f"文件超过 50MB，跳过发送: {filepath.name} ({file_size / 1024 / 1024:.2f}MB)")
                 return False
             
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendDocument"
             with open(filepath, 'rb') as f:
-                files = {'document': f}
-                data = {
+                response = requests.post(url, files={'document': f}, data={
                     'chat_id': self.telegram_chat_id,
                     'caption': caption
-                }
-                response = requests.post(url, files=files, data=data, timeout=300)
-                response.raise_for_status()
-            
+                }, timeout=300)
+            response.raise_for_status()
             logger.info(f"文件发送成功: {filepath.name}")
             return True
         except Exception as e:
@@ -165,25 +173,38 @@ class GitHubReleaseMonitor:
             pub_time = datetime.fromisoformat(
                 release['published_at'].replace('Z', '+00:00')
             ).strftime('%Y-%m-%d %H:%M:%S UTC')
-        except:
+        except Exception as e:
+            logger.warning(f"时间解析失败: {e}")
             pub_time = release.get('published_at', '未知时间')
         
-        # 处理更新说明
-        body = release.get('body', '无更新说明').strip()
+        # 处理更新说明 - 修复 None 问题
+        body = release.get('body')
+        if not body:  # 处理 None 或空字符串
+            body = '无更新说明'
+        else:
+            body = str(body).strip()
+        
         if len(body) > 3500:
             body = body[:3500] + "\n\n...(内容过长)"
         
         # 文件列表
         assets = release.get('assets', [])
         if assets:
-            files_list = "\n".join([
-                f"  📄 {a['name']} ({a['size']/1024/1024:.1f}MB)"
-                for a in assets
-            ])
+            try:
+                files_list = "\n".join([
+                    f"  📄 {a['name']} ({a['size']/1024/1024:.1f}MB)"
+                    for a in assets
+                ])
+            except Exception as e:
+                logger.warning(f"文件列表格式化失败: {e}")
+                files_list = f"  {len(assets)} 个文件"
         else:
             files_list = "  无附件"
         
-        msg = f""" <b>新版本发布</b>
+        # 获取 HTML URL
+        html_url = release.get('html_url', f'{self.repo_url}/releases/tag/{tag}')
+        
+        msg = f"""🎉 <b>新版本发布</b>
 
 📦 <b>{name}</b>
 🏷️ 版本: <code>{tag}</code>
@@ -195,12 +216,12 @@ class GitHubReleaseMonitor:
 📎 <b>下载文件</b> ({len(assets)}个)
 {files_list}
 
-🔗 <a href="{release['html_url']}">GitHub Release</a>"""
+🔗 <a href="{html_url}">GitHub Release</a>"""
         
         return msg
 
     def run(self):
-        """主执行流程"""
+        """主运行逻辑"""
         logger.info("=" * 50)
         logger.info("开始检查新版本...")
         
@@ -211,7 +232,7 @@ class GitHubReleaseMonitor:
             sys.exit(1)
         
         current_tag = latest['tag_name']
-        last_tag = self.load_state()
+        last_tag = self.get_last_tag()
         
         logger.info(f"当前最新版本: {current_tag}")
         logger.info(f"上次记录版本: {last_tag}")
@@ -227,8 +248,10 @@ class GitHubReleaseMonitor:
                 
                 if days_old > 7:
                     logger.info(f"版本已发布{days_old}天，仅记录不通知")
-                    self.save_state(current_tag)
+                    self.save_last_tag(current_tag)
                     return
+                else:
+                    logger.info(f"版本发布{days_old}天，发送通知")
             except Exception as e:
                 logger.warning(f"时间检查失败: {e}")
         
@@ -241,7 +264,7 @@ class GitHubReleaseMonitor:
         
         # 发送通知
         message = self.format_message(latest)
-        if not self.send_telegram_message(message):
+        if not self.send_tg_message(message):
             logger.error("发送通知失败，终止流程")
             sys.exit(1)
         
@@ -252,31 +275,35 @@ class GitHubReleaseMonitor:
         success_count = 0
         for asset in assets:
             try:
-                url = asset['browser_download_url']
-                name = asset['name']
+                url = asset.get('browser_download_url')
+                name = asset.get('name')
+                
+                if not url or not name:
+                    logger.warning(f"跳过无效资产: {asset}")
+                    continue
                 
                 # 下载
-                filepath = self.download_file(url, name)
+                filepath = self.download_asset(url, name)
                 if not filepath:
                     continue
                 
                 # 发送
                 caption = f"📦 {latest.get('name', current_tag)}\n{name}"
-                if self.send_telegram_file(filepath, caption):
+                if self.send_tg_document(filepath, caption):
                     success_count += 1
                 
-                # 清理
+                # 清理本地文件
                 try:
                     filepath.unlink()
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"清理文件失败: {e}")
                     
             except Exception as e:
                 logger.error(f"处理文件失败: {e}")
                 continue
         
         # 保存状态
-        self.save_state(current_tag)
+        self.save_last_tag(current_tag)
         
         logger.info("=" * 50)
         logger.info(f"✅ 完成！成功发送 {success_count}/{len(assets)} 个文件")
