@@ -7,6 +7,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  GITHUB_REPO_URL: 'https://github.com/Silent1566/webhtv'
 
 jobs:
   check-release:
@@ -31,29 +32,24 @@ jobs:
         with:
           path: last_release.json
           key: ${{ runner.os }}-monitor-${{ github.repository }}
-          restore-keys: |
-            ${{ runner.os }}-monitor-${{ github.repository }}
           fail-on-cache-miss: false
 
-      - name: Create empty state file if not exists
+      - name: Create state file if not exists
         run: |
           if [ ! -f last_release.json ]; then
             echo '{"last_tag": null}' > last_release.json
-            echo "Created empty state file"
-          else
-            echo "State file exists:"
-            cat last_release.json
           fi
 
+      # 运行脚本
       - name: Run Monitor Script
+        run: python github_release_monitor.py
         env:
-          GITHUB_REPO_URL: 'https://github.com/Silent1566/webhtv'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python github_release_monitor.py
+          GITHUB_REPO_URL: ${{ env.GITHUB_REPO_URL }}
 
-      # 保存缓存 - 注意：save 动作不支持 restore-keys
+      # 保存缓存
       - name: Save state to cache
         uses: actions/cache/save@v4
         if: always()
