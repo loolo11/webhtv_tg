@@ -1,19 +1,17 @@
 name: GitHub Release Monitor
 
 on:
-  # 定时触发：每 2 小时运行一次 (GitHub cron 使用 UTC 时间)
   schedule:
-    - cron: '0 */2 * * *' 
-  
-  # 允许在 GitHub 网页上手动点击按钮触发（方便测试）
-  workflow_dispatch:
+    # 每 2 小时运行一次 (GitHub 的 cron 可能会有几分钟到半小时的延迟)
+    - cron: '0 */2 * * *'
+  workflow_dispatch: # 允许在网页上手动点击触发
 
 jobs:
-  monitor:
+  check-release:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -21,30 +19,23 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: pip install requests
 
-      # 核心：使用 Cache 恢复上次检测的版本记录文件，防止重复发送
-      - name: Restore Last Release State
+      # 核心：使用 Cache 保存 last_release.json，避免每次运行都重复发送
+      - name: Restore Cache
         uses: actions/cache@v4
         with:
           path: last_release.json
-          key: release-state-cache-${{ runner.os }}
+          # 使用文件内容的 hash 作为 key，如果文件更新，会自动生成新 cache
+          key: release-monitor-state-${{ hashFiles('last_release.json') }}
           restore-keys: |
-            release-state-cache-
+            release-monitor-state-
 
       - name: Run Monitor Script
         env:
-          TARGET_REPO_URL: ${{ secrets.TARGET_REPO_URL }}
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHub 自动生成的临时 Token
-        run: python github_release_monitor.py --once
-        
-      # 如果产生了新的 last_release.json，保存进 Cache 供下次使用
-      - name: Save State to Cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: last_release.json
-          key: release-state-cache-${{ runner.os }}
+          GITHUB_REPO_URL: 'https://github.com/Silent1566/webhtv'
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python github_release_monitor.py
