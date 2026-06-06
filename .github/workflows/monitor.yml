@@ -1,0 +1,50 @@
+name: GitHub Release Monitor
+
+on:
+  # 定时触发：每 2 小时运行一次 (GitHub cron 使用 UTC 时间)
+  schedule:
+    - cron: '0 */2 * * *' 
+  
+  # 允许在 GitHub 网页上手动点击按钮触发（方便测试）
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      # 核心：使用 Cache 恢复上次检测的版本记录文件，防止重复发送
+      - name: Restore Last Release State
+        uses: actions/cache@v4
+        with:
+          path: last_release.json
+          key: release-state-cache-${{ runner.os }}
+          restore-keys: |
+            release-state-cache-
+
+      - name: Run Monitor Script
+        env:
+          TARGET_REPO_URL: ${{ secrets.TARGET_REPO_URL }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHub 自动生成的临时 Token
+        run: python github_release_monitor.py --once
+        
+      # 如果产生了新的 last_release.json，保存进 Cache 供下次使用
+      - name: Save State to Cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: last_release.json
+          key: release-state-cache-${{ runner.os }}
